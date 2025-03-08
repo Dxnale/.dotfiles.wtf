@@ -1,0 +1,18 @@
+---
+"editor:edit_link": none
+"editor_view:clear_buffer": none
+"editor_view:cut_word_left": none
+"editor_view:clear_and_copy_lines": none
+"editor_view:right": none
+"workspace:close_active_tab": ctrl-w
+"input:search_command_history": ctrl-r
+"terminal:paste": ctrl-v
+"terminal:accept_agent_mode_query_suggestion": enter
+"editor:find": none
+"editor_view:cut_all_right": none
+"workspace:toggle_command_palette": ctrl-k
+"terminal:copy": ctrl-c
+"workspace:new_tab": ctrl-t
+"workspace:show_command_search": none
+"editor_view:delete_all_left": none
+"terminal:find": ctrl-shift-F

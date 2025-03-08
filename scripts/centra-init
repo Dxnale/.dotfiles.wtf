@@ -1,0 +1,367 @@
+#!/bin/bash
+
+to_camel_case() {
+    IFS='_' read -r -a parts <<< "$1"
+    for part in "${parts[@]}"; do
+        camel_case+=("${part^}")
+    done
+    echo "${camel_case[*]}" | tr -d ' '
+}
+
+cd ~/buk/buk-webapp || { echo "No se pudo cambiar al directorio buk-webapp"; exit 1; }
+
+echo "¿Qué es lo que requieres hacer?"
+echo "1. Centralización"
+read -p "Selecciona una opción (1): " opcion
+
+if [ "$opcion" -eq 1 ]; then
+    clear
+    echo "Seleccionaste Centralización"
+    echo "¿Para qué país es la centralización?"
+    echo "1. Chile"
+    echo "2. Perú"
+    echo "3. Colombia"
+    echo "4. México"
+    read -p "Selecciona un país (1, 2, 3, 4): " pais
+
+    case "$pais" in
+        1) pais="Chile";;
+        2) pais="Peru";;
+        3) pais="Colombia";;
+        4) pais="Mexico";;
+        *) echo "Opción inválida"; exit 1;;
+    esac
+
+    echo "¿Qué tipo de centralización se utilizará?"
+    clear
+    echo "1. Centra xlsx"
+    echo "2. Centra xlsx separada"
+    echo "3. Centra xlsx separada y agrupada"
+    echo "4. Centra txt o csv"
+    echo "5. Centra xlsx agrupada"
+    read -p "Selecciona una opción (1, 2, 3, 4, 5): " tipo
+
+    extension=""
+    if [ "$tipo" -ge 4 ] && [ "$tipo" -lt 5 ]; then
+        read -p "¿Cuál es la extensión (csv, txt)?: " extension
+    fi
+
+     while true; do
+        read -p "Ingresa el nombre del archivo (sin extensión y en fomato snake_case): " nombre_archivo
+        if [[ "$nombre_archivo" =~ ^[a-z0-9_]+$ ]]; then
+            break
+        else
+            echo "Solo acepto nombres en snake_case, ejemplo: hola_mundo"
+        fi
+     done
+
+    nombre_clase=$(to_camel_case "$nombre_archivo")
+
+    ruta_archivo="packs/integraciones/${pais,,}/contabilidad/app/services/exportador/contabilidad/${pais,,}/personalizadas/${nombre_archivo}.rb"
+    ruta_test="packs/integraciones/${pais,,}/contabilidad/test/services/exportador/contabilidad/${pais,,}/personalizadas/${nombre_archivo}_test.rb"
+
+    mkdir -p "$(dirname "$ruta_archivo")"
+    mkdir -p "$(dirname "$ruta_test")"
+
+    case "$tipo" in
+        1) plantilla="# frozen_string_literal: true
+#
+# Clase para generar centralización contable personalizada para ${nombre_archivo}
+class Exportador::Contabilidad::${pais}::Personalizadas::${nombre_clase} < Exportador::Contabilidad::${pais}::CentralizacionContable
+
+  CABECERA = [
+    'cabecera'
+  ].freeze
+
+  def generate_doc(empresa, variable, obj_contabilidad)
+    return unless obj_contabilidad.present?
+
+    book = Exportador::BaseXlsx.crear_libro
+    book.worksheets = []
+    sheet = Exportador::BaseXlsx.crear_hoja book, empresa.nombre
+    Exportador::BaseXlsx.autofit sheet, [CABECERA]
+    Exportador::BaseXlsx.crear_encabezado(sheet, CABECERA, 0)
+
+    date = Variable::Utils.end_of_period(variable.start_date, variable.period_type)
+    date_ddmmyyyy = date.strftime('%d-%m-%Y')
+
+    obj_contabilidad = obj_contabilidad.group_by do |l|
+      {
+        nombre: \"#{l.employee.display_name(:last_name)} #{l.employee.display_name(:second_last_name)} #{l.employee.display_name(:first_name)}\",
+        cuenta_contable: l.cuenta_contable,
+        lado: l.deber_o_haber,
+        centro_costos: l.centro_costo,
+        glosa: l.glosa,
+      }
+    end
+
+    data = obj_contabilidad.lazy.map do |k, v|
+      [
+        date_ddmmyyyy,
+        k[:nombre],
+        k[:cuenta_contable],
+        k[:lado] == 'D' ? v.sum(&:monto) : nil,
+        k[:lado] == 'C' ? v.sum(&:monto) : nil,
+        k[:centro_costos],
+        k[:glosa],
+      ]
+    end
+
+    Exportador::BaseXlsx.escribir_celdas sheet, data, offset: 1, number_format: '#,##0'
+    Exportador::BaseXlsx.cerrar_libro(book).contenido
+  end
+end
+";;
+        2) # Centra xlsx separada
+            plantilla="# frozen_string_literal: true
+
+#
+# Clase para generar centralización contable personalizada para ${nombre_archivo}
+class Exportador::Contabilidad::${pais}::Personalizadas::${nombre_clase} < Exportador::Contabilidad::${pais}::CentralizacionContable
+
+  CABECERA = [
+    'cabecera'
+  ].freeze
+
+  def generate_doc(empresa, variable, obj_contabilidad)
+    return unless obj_contabilidad.present?
+
+    books = {}
+    obj_contabilidad.group_by { |l| l.cuenta_custom_attrs&.dig('${3:Tipo asiento}').presence || 'Otros' }.map do |k, obj|
+      book = generate_book(empresa, variable, obj, k)
+      books[k] = Exportador::Contabilidad::AccountingFile.new(contents: book, name: k)
+    end
+    books
+  end
+
+  def generate_book(empresa, variable, obj_contabilidad, _nombre)
+    return unless obj_contabilidad.present?
+
+    book = Exportador::BaseXlsx.crear_libro
+    book.worksheets = []
+    sheet = Exportador::BaseXlsx.crear_hoja book, empresa.nombre
+    Exportador::BaseXlsx.autofit sheet, [CABECERA]
+    Exportador::BaseXlsx.crear_encabezado(sheet, CABECERA, 0)
+
+    date = Variable::Utils.end_of_period(variable.start_date, variable.period_type)
+    date_ddmmyyyy = I18n.l(date, format: '%d/%m/%Y')
+
+    data = obj_contabilidad.lazy.map do |l|
+      [
+        date_ddmmyyyy,
+        l.cuenta_contable,
+        l.glosa,
+        l.deber,
+        l.haber,
+      ]
+    end
+
+    Exportador::BaseXlsx.escribir_celdas sheet, data, offset: 1, number_format: '#,##0'
+    Exportador::BaseXlsx.cerrar_libro(book).contenido
+  end
+end";;
+        3)# Centra xlsx separada y agrupada
+            plantilla="# frozen_string_literal: true
+
+#
+# Clase para generar centralización contable personalizada para ${nombre_archivo}
+class Exportador::Contabilidad::${pais}::Personalizadas::${nombre_clase} < Exportador::Contabilidad::${pais}::CentralizacionContable
+
+  CABECERA = [
+    'cabecera'
+  ].freeze
+
+  def generate_doc(empresa, variable, obj_contabilidad)
+    return unless obj_contabilidad.present?
+
+    books = {}
+    obj_contabilidad.group_by { |l| l.cuenta_custom_attrs&.dig('${3:Tipo asiento}').presence || 'Otros' }.map do |k, obj|
+      book = generate_book(empresa, variable, obj, k)
+      books[k] = Exportador::Contabilidad::AccountingFile.new(contents: book, name: k)
+    end
+    books
+  end
+
+  def generate_book(empresa, variable, obj_contabilidad, _nombre)
+    return unless obj_contabilidad.present?
+
+    book = Exportador::BaseXlsx.crear_libro
+    book.worksheets = []
+    sheet = Exportador::BaseXlsx.crear_hoja book, empresa.nombre
+    Exportador::BaseXlsx.autofit sheet, [CABECERA]
+    Exportador::BaseXlsx.crear_encabezado(sheet, CABECERA, 0)
+
+    date = Variable::Utils.end_of_period(variable.start_date, variable.period_type)
+    date_ddmmyyyy = I18n.l(date, format: '%d/%m/%Y')
+
+    obj_contabilidad = obj_contabilidad.group_by do |l|
+      {
+        nombre: \"#{l.employee.display_name(:last_name)} #{l.employee.display_name(:second_last_name)} #{l.employee.display_name(:first_name)}\",
+        cuenta_contable: l.cuenta_contable,
+        lado: l.deber_o_haber,
+        centro_costos: l.centro_costo,
+        glosa: l.glosa,
+      }
+    end
+
+    data = obj_contabilidad.lazy.map do |k, v|
+      [
+        date_ddmmyyyy,
+        k[:nombre],
+        k[:cuenta_contable],
+        k[:lado] == 'D' ? v.sum(&:monto) : nil,
+        k[:lado] == 'C' ? v.sum(&:monto) : nil,
+        k[:centro_costos],
+        k[:glosa],
+      ]
+    end
+
+    Exportador::BaseXlsx.escribir_celdas sheet, data, offset: 1, number_format: '#,##0'
+    Exportador::BaseXlsx.cerrar_libro(book).contenido
+  end
+end";;
+        4) # Centra txt o csv
+            plantilla="# frozen_string_literal: true
+
+#
+# Clase para generar centralización contable personalizada para ${nombre_archivo}
+class Exportador::Contabilidad::${pais}::Personalizadas::${nombre_clase} < Exportador::Contabilidad::${pais}::CentralizacionContable
+  require 'csv'
+  def initialize
+    super()
+    @extension = '$extension'  # Cambiar a 'txt' si prefieres TXT
+  end
+
+  CABECERA = [
+    'cabecera'
+  ].freeze
+
+  def generate_doc(empresa, variable, obj_contabilidad)
+    return unless obj_contabilidad.present?
+
+    date = Variable::Utils.end_of_period(variable.start_date, variable.period_type)
+    date_ddmmyyyy = I18n.l(date, format: '%d/%m/%Y')
+
+    data = obj_contabilidad.lazy.map do |l|
+      [
+        date_ddmmyyyy,
+        l.cuenta_contable,
+        l.glosa,
+        l.deber,
+        l.haber,
+      ]
+    end
+
+    CSV.generate(headers: true) do |csv|
+      csv << CABECERA
+      data.each { |row| csv << row }
+    end
+  end
+end";;
+        5) # Centra xlsx agrupada
+            plantilla="# frozen_string_literal: true
+
+#
+# Clase para generar centralización contable personalizada para ${nombre_archivo}
+class Exportador::Contabilidad::${pais}::Personalizadas::${nombre_clase} < Exportador::Contabilidad::${pais}::CentralizacionContable
+
+  CABECERA = [
+    'cabecera'
+  ].freeze
+
+  def generate_doc(empresa, variable, obj_contabilidad)
+    return unless obj_contabilidad.present?
+
+    book = Exportador::BaseXlsx.crear_libro
+    book.worksheets = []
+    sheet = Exportador::BaseXlsx.crear_hoja book, empresa.nombre
+    Exportador::BaseXlsx.autofit sheet, [CABECERA]
+    Exportador::BaseXlsx.crear_encabezado(sheet, CABECERA, 0)
+
+    date = Variable::Utils.end_of_period(variable.start_date, variable.period_type)
+    date_ddmmyyyy = date.strftime('%d-%m-%Y')
+
+    obj_contabilidad = obj_contabilidad.group_by do |l|
+      {
+        nombre: \"#{l.employee.display_name(:last_name)} #{l.employee.display_name(:second_last_name)} #{l.employee.display_name(:first_name)}\",
+        cuenta_contable: l.cuenta_contable,
+        lado: l.deber_o_haber,
+        centro_costos: l.centro_costo,
+        glosa: l.glosa,
+      }
+    end
+
+    data = obj_contabilidad.lazy.map do |k, v|
+      [
+        date_ddmmyyyy,
+        k[:nombre],
+        k[:cuenta_contable],
+        k[:lado] == 'D' ? v.sum(&:monto) : nil,
+        k[:lado] == 'C' ? v.sum(&:monto) : nil,
+        k[:centro_costos],
+        k[:glosa],
+      ]
+    end
+
+    Exportador::BaseXlsx.escribir_celdas sheet, data, offset: 1, number_format: '#,##0'
+    Exportador::BaseXlsx.cerrar_libro(book).contenido
+  end
+end";;
+        *)
+            echo "Opción inválida"
+            exit 1
+            ;;
+    esac
+
+    test_plantilla="require 'test_helper'
+
+class Exportador::Contabilidad::${pais}::Personalizadas::${nombre_clase}Test < ActiveSupport::TestCase
+  setup do
+    @variable = variables(:variables_012)
+    @empresa = empresas(:one)
+    liquidaciones = preloaded_liquidacions(@variable.liquidacions.where(empresa_id: @empresa.id))
+    @liquidaciones_rol_general = liquidaciones.rol_general
+    @liquidaciones_rol_privado = liquidaciones.rol_privado
+    @lineas_contabilidad_general = ::Contabilidad::LineasLiquidacionesService.new(@liquidaciones_rol_general).elements
+    @lineas_contabilidad_privado = ::Contabilidad::LineasLiquidacionesService.new(@liquidaciones_rol_privado).elements
+    @lineas_provision_general = ::Contabilidad::ProvisionVacacionesService.new(@liquidaciones_rol_general).elements
+    @lineas_provision_privado = ::Contabilidad::ProvisionVacacionesService.new(@liquidaciones_rol_privado).elements
+    @clazz = Exportador::Contabilidad::${pais}::Personalizadas::${nombre_clase}.new
+  end
+
+  context 'centralizacion personalizada' do
+    should 'crear lineas sin errores' do
+      aggregating_errors do
+        res = @clazz.generate_doc @empresa, @variable, @lineas_contabilidad_general
+
+        assert_not_nil res, 'Documento rol general liquidaciones no generado'
+        res = @clazz.generate_doc @empresa, @variable, @lineas_contabilidad_privado
+
+        assert_not_nil res, 'Documento rol privado liquidaciones no generado'
+        res = @clazz.generate_doc @empresa, @variable, @lineas_provision_general
+
+        assert_not_nil res, 'Documento rol general provision vacaciones no generado'
+        res = @clazz.generate_doc @empresa, @variable, @lineas_provision_privado
+
+        assert_not_nil res, 'Documento rol privado provision vacaciones no generado'
+      end
+    end
+  end
+
+  private
+
+    def preloaded_liquidacions(liquidacions)
+      liquidacions.preload(Exportador::Contabilidad::SETTLEMENTS_PRELOAD_RELATIONS)
+    end
+end"
+
+    echo "$plantilla" > "$ruta_archivo"
+    echo "$test_plantilla" > "$ruta_test"
+
+    echo "Centralización y Test generados correctamente en las siguientes rutas:"
+    echo "Centralización: $ruta_archivo"
+    echo "Test: $ruta_test"
+else
+    echo "Opción inválida"
+    exit 1
+fi

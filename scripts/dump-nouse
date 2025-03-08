@@ -1,0 +1,35 @@
+#!/bin/bash
+
+set -e
+
+DOWNLOADS_DIR="$HOME/Descargas"
+
+DUMP_DIR="$DOWNLOADS_DIR"
+
+BUK_WEBAPP_DIR="$HOME/buk/buk-webapp"
+
+if [ ! "$(ls -A "$DUMP_DIR"/*.dump 2>/dev/null)" ]; then
+    echo "No se encontraron archivos .dump en $DUMP_DIR"
+    exit 1
+fi
+
+cd "$BUK_WEBAPP_DIR" || { echo "Error: No se pudo cambiar al directorio $BUK_WEBAPP_DIR"; exit 1; }
+
+mkdir -p dumps
+
+for dump_file in "$DUMP_DIR"/*.dump; do
+    if [ -f "$dump_file" ]; then
+        echo "Restaurando el archivo $dump_file"
+        bin/restore-dump "$dump_file"
+
+        filename=$(basename -- "$dump_file")
+        mv "$dump_file" "dumps/$filename"
+        echo "Archivo $dump_file movido a dumps/$filename"
+    fi
+done
+
+echo "Todos los dumps han sido restaurados. Ejecutando migraciones de base de datos..."
+bin/rails db:migrate
+echo "Migraciones completadas."
+
+echo "Proceso completado"

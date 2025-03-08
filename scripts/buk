@@ -1,0 +1,22 @@
+#!/bin/sh
+gnome-terminal --tab --title="Buk Server" -- zsh -c "cd ~/buk/buk-webapp; rails s; exec zsh -i";
+gnome-terminal --tab --title="Front" -- zsh -c "cd ~/buk/buk-webapp; bin/webpack-dev-server; exec zsh -i";
+gnome-terminal --tab --title="Jobs" -- zsh -c "cd ~/buk/buk-webapp; rails jobs:work; exec zsh -i";
+gnome-terminal --tab --title="Console" -- zsh -c "cd ~/buk/buk-webapp; rails c; exec zsh -i";
+
+
+# Espera un tiempo para asegurarse de que los terminales estén abiertos
+sleep 2
+
+# Obtén el ID del proceso padre
+parent_pid=$$
+
+# Obtiene el ID del terminal actual (la ventana del script)
+terminal_pid=$(ps -o ppid= -p $$)
+
+# Espera hasta que los procesos hijos terminen
+wait
+
+# Cierra el terminal actual
+
+kill -9 $terminal_pid
